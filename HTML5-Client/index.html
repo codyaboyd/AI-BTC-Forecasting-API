@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BTC Prediction Client</title>
+
+    <!-- Bootstrap 5 (CDN) -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+
+    <style>
+      body { background: #0b1220; }
+      .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); }
+      .text-muted-soft { color: rgba(255,255,255,0.6) !important; }
+      pre { max-height: 420px; overflow: auto; }
+      code { color: #d2e3ff; }
+      .table { --bs-table-bg: transparent; }
+      .badge-soft { background: rgba(13, 110, 253, 0.18); border: 1px solid rgba(13,110,253,0.35); }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    </style>
+  </head>
+
+  <body class="text-white">
+    <div class="container py-4">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+        <div>
+          <h1 class="h3 mb-1">BTC Prediction Client</h1>
+          <div class="text-muted-soft small">
+            Simple internal UI for <span class="mono">/health</span>, <span class="mono">/price/live</span>, and <span class="mono">/predict</span>
+          </div>
+        </div>
+        <div class="d-flex gap-2">
+          <span id="statusBadge" class="badge badge-soft rounded-pill px-3 py-2 mono">idle</span>
+          <button id="btnClear" class="btn btn-outline-light btn-sm">Clear</button>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <!-- Controls -->
+        <div class="col-12 col-lg-4">
+          <div class="card rounded-4 shadow-sm">
+            <div class="card-body">
+              <h2 class="h6 mb-3">Request Settings</h2>
+
+              <div class="mb-3">
+                <label class="form-label">API Base URL</label>
+                <input
+                  id="baseUrl"
+                  type="url"
+                  class="form-control form-control-sm"
+                  placeholder="http://localhost:8080"
+                  value="http://localhost:8080"
+                />
+                <div class="form-text text-muted-soft">
+                  Must point to your FastAPI server (e.g. <span class="mono">http://localhost:8080</span>).
+                </div>
+              </div>
+
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label">vs_currency</label>
+                  <input id="vsCurrency" class="form-control form-control-sm" value="usd" />
+                </div>
+                <div class="col-6">
+                  <label class="form-label">Days Forward</label>
+                  <input
+                    id="days"
+                    type="number"
+                    class="form-control form-control-sm"
+                    min="1"
+                    max="365"
+                    value="7"
+                  />
+                </div>
+              </div>
+
+              <div class="mt-3">
+                <label class="form-label">Optuna Trials (compute-heavy)</label>
+                <input
+                  id="optunaTrials"
+                  type="number"
+                  class="form-control form-control-sm"
+                  min="10"
+                  max="500"
+                  value="80"
+                />
+                <div class="form-text text-muted-soft">
+                  Higher = slower, potentially better fit. (Try 40/80/200.)
+                </div>
+              </div>
+
+              <hr class="border-light border-opacity-10 my-4" />
+
+              <div class="d-grid gap-2">
+                <button id="btnHealth" class="btn btn-outline-info">
+                  Check Health
+                </button>
+                <button id="btnLive" class="btn btn-outline-primary">
+                  Fetch Live BTC Price
+                </button>
+                <button id="btnPredict" class="btn btn-primary">
+                  Predict BTC
+                </button>
+              </div>
+
+              <div class="mt-3 small text-muted-soft">
+                Tip: if you’re opening this from <code>file://</code>, your API must allow CORS.
+              </div>
+            </div>
+          </div>
+
+          <div class="card rounded-4 shadow-sm mt-3">
+            <div class="card-body">
+              <h2 class="h6 mb-2">Quick Notes</h2>
+              <ul class="small text-muted-soft mb-0">
+                <li>Forecast error compounds with horizon length.</li>
+                <li>Expect longer runtimes with high trials.</li>
+                <li>Use caching/cron in production.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Output -->
+        <div class="col-12 col-lg-8">
+          <div class="card rounded-4 shadow-sm">
+            <div class="card-body">
+              <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                <h2 class="h6 mb-0">Results</h2>
+                <div class="small text-muted-soft">
+                  <span class="mono" id="timing">—</span>
+                </div>
+              </div>
+
+              <div id="summary" class="mb-3 small"></div>
+
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle text-white mb-3">
+                  <thead class="text-muted-soft">
+                    <tr>
+                      <th style="min-width: 120px;">Date</th>
+                      <th style="min-width: 160px;">Predicted Price</th>
+                      <th style="min-width: 160px;">Predicted Return</th>
+                    </tr>
+                  </thead>
+                  <tbody id="predTable">
+                    <tr><td colspan="3" class="text-muted-soft">No data yet.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="accordion" id="rawAccordion">
+                <div class="accordion-item bg-transparent border-light border-opacity-10">
+                  <h2 class="accordion-header">
+                    <button class="accordion-button collapsed bg-transparent text-white" type="button" data-bs-toggle="collapse" data-bs-target="#rawJsonWrap">
+                      Raw JSON
+                    </button>
+                  </h2>
+                  <div id="rawJsonWrap" class="accordion-collapse collapse" data-bs-parent="#rawAccordion">
+                    <div class="accordion-body">
+                      <pre class="rounded-3 p-3 mb-0" style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08);"><code id="rawJson" class="mono">—</code></pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="errorBox" class="alert alert-danger mt-3 d-none" role="alert"></div>
+            </div>
+          </div>
+
+          <div class="card rounded-4 shadow-sm mt-3">
+            <div class="card-body">
+              <h2 class="h6 mb-2">CORS (if needed)</h2>
+              <div class="small text-muted-soft">
+                If this UI is opened from <code>file://</code> or a different domain, enable CORS on the API.
+                In FastAPI, add <span class="mono">CORSMiddleware</span> allowing your origin.
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+      crossorigin="anonymous"
+    ></script>
+
+    <script>
+      // ----------------------------
+      // Helpers
+      // ----------------------------
+      const $ = (id) => document.getElementById(id);
+      const STORAGE_KEY = "btc_pred_settings";
+
+      function setStatus(text) {
+        $("statusBadge").textContent = text;
+      }
+
+      function setError(msg) {
+        const box = $("errorBox");
+        if (!msg) {
+          box.classList.add("d-none");
+          box.textContent = "";
+          return;
+        }
+        box.textContent = msg;
+        box.classList.remove("d-none");
+      }
+
+      function pretty(obj) {
+        return JSON.stringify(obj, null, 2);
+      }
+
+      function fmtNum(x, digits=8) {
+        if (x === null || x === undefined || Number.isNaN(x)) return "—";
+        const n = Number(x);
+        if (!Number.isFinite(n)) return String(x);
+        return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+      }
+
+      function normalizeBaseUrl(baseUrl) {
+        // Ensure no trailing slashes, so URL(path, base) behaves predictably
+        return baseUrl.replace(/\/+$/, "");
+      }
+
+      function readSettings() {
+        const s = {
+          baseUrl: $("baseUrl").value.trim(),
+          vsCurrency: $("vsCurrency").value.trim() || "usd",
+          days: Number($("days").value || 7),
+          optunaTrials: Number($("optunaTrials").value || 80),
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+        return s;
+      }
+
+      function loadSettings() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return;
+          const s = JSON.parse(raw);
+          if (s.baseUrl) $("baseUrl").value = s.baseUrl;
+          if (s.vsCurrency) $("vsCurrency").value = s.vsCurrency;
+          if (s.days) $("days").value = s.days;
+          if (s.optunaTrials) $("optunaTrials").value = s.optunaTrials;
+        } catch (_) {}
+      }
+
+      async function apiGet(path, params = {}) {
+        const s = readSettings();
+        const base = normalizeBaseUrl(s.baseUrl || "http://localhost:8080");
+
+        // URL(path, base) requires base to end with a slash for correct path joining,
+        // so we provide `${base}/` and pass `path` without worrying about leading slashes.
+        const url = new URL(path.replace(/^\/+/, ""), base + "/");
+
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+        });
+
+        setError(null);
+        setStatus("loading");
+
+        const start = performance.now();
+        const res = await fetch(url.toString(), {
+          method: "GET",
+          headers: { "Accept": "application/json" },
+        });
+        const ms = Math.round(performance.now() - start);
+        $("timing").textContent = `${ms} ms — /${url.pathname.replace(/^\/+/, "")}${url.search}`;
+
+        let body;
+        const text = await res.text();
+        try { body = text ? JSON.parse(text) : {}; }
+        catch { body = { raw: text }; }
+
+        if (!res.ok) {
+          const detail = (body && (body.detail || body.error)) ? (body.detail || body.error) : text;
+          throw new Error(`HTTP ${res.status}: ${detail}`);
+        }
+
+        setStatus("ok");
+        return body;
+      }
+
+      function renderPredictions(data) {
+        const tbody = $("predTable");
+        tbody.innerHTML = "";
+
+        const preds = data?.predictions || [];
+        if (!preds.length) {
+          tbody.innerHTML = `<tr><td colspan="3" class="text-muted-soft">No predictions returned.</td></tr>`;
+          return;
+        }
+
+        for (const p of preds) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono">${p.date ?? "—"}</td>
+            <td class="mono">$${fmtNum(p.predicted_price, 10)}</td>
+            <td class="mono">${fmtNum(p.predicted_return, 10)}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+
+      function renderSummary(data, kind) {
+        const el = $("summary");
+        if (!data) { el.innerHTML = ""; return; }
+
+        if (kind === "health") {
+          el.innerHTML = `<span class="badge badge-soft rounded-pill mono px-3 py-2">/health</span>
+                          <span class="ms-2 text-muted-soft">ok: ${String(data.ok)}</span>`;
+          return;
+        }
+
+        if (kind === "live") {
+          el.innerHTML = `<span class="badge badge-soft rounded-pill mono px-3 py-2">/price/live</span>
+                          <span class="ms-2 text-muted-soft">coin: <span class="mono">${data.coin_id ?? "—"}</span></span>
+                          <span class="ms-2 text-muted-soft">vs: <span class="mono">${data.vs_currency ?? "—"}</span></span>
+                          <span class="ms-2">price: <span class="mono">$${fmtNum(data.price, 10)}</span></span>`;
+          return;
+        }
+
+        // predict
+        const d = data;
+        const diag = d.diagnostics || {};
+        const xrmse = diag.xgb_cv_rmse !== undefined ? fmtNum(diag.xgb_cv_rmse, 10) : "—";
+        const aic = diag.sarimax_aic !== undefined ? fmtNum(diag.sarimax_aic, 2) : "—";
+        const rows = diag.rows_used !== undefined ? fmtNum(diag.rows_used, 0) : "—";
+
+        el.innerHTML = `
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <span class="badge badge-soft rounded-pill mono px-3 py-2">/predict</span>
+            <span class="text-muted-soft">coin: <span class="mono">${d.coin_id ?? "—"}</span></span>
+            <span class="text-muted-soft">vs: <span class="mono">${d.vs_currency ?? "—"}</span></span>
+            <span class="text-muted-soft">horizon: <span class="mono">${d.horizon_days ?? "—"}</span> days</span>
+            <span class="text-muted-soft">last: <span class="mono">${d.last_date ?? "—"}</span></span>
+            <span>last_price: <span class="mono">$${fmtNum(d.last_price, 10)}</span></span>
+          </div>
+          <div class="mt-2 small text-muted-soft">
+            diagnostics — XGB CV RMSE: <span class="mono">${xrmse}</span> · SARIMAX AIC: <span class="mono">${aic}</span> · rows: <span class="mono">${rows}</span>
+          </div>
+        `;
+      }
+
+      function renderRaw(data) {
+        $("rawJson").textContent = data ? pretty(data) : "—";
+      }
+
+      // ----------------------------
+      // Event Handlers
+      // ----------------------------
+      async function onHealth() {
+        try {
+          const data = await apiGet("/health");
+          renderSummary(data, "health");
+          renderPredictions({ predictions: [] });
+          renderRaw(data);
+        } catch (e) {
+          setStatus("error");
+          setError(e.message);
+        }
+      }
+
+      async function onLive() {
+        try {
+          const s = readSettings();
+          const data = await apiGet("/price/live", { vs_currency: s.vsCurrency });
+          renderSummary(data, "live");
+          renderPredictions({ predictions: [] });
+          renderRaw(data);
+        } catch (e) {
+          setStatus("error");
+          setError(e.message);
+        }
+      }
+
+      async function onPredict() {
+        try {
+          const s = readSettings();
+          const data = await apiGet("/predict", {
+            days: s.days,
+            vs_currency: s.vsCurrency,
+            optuna_trials: s.optunaTrials
+          });
+          renderSummary(data, "predict");
+          renderPredictions(data);
+          renderRaw(data);
+        } catch (e) {
+          setStatus("error");
+          setError(e.message);
+        }
+      }
+
+      function onClear() {
+        $("predTable").innerHTML = `<tr><td colspan="3" class="text-muted-soft">No data yet.</td></tr>`;
+        $("summary").innerHTML = "";
+        $("rawJson").textContent = "—";
+        $("timing").textContent = "—";
+        setError(null);
+        setStatus("idle");
+      }
+
+      // Init
+      loadSettings();
+      $("btnHealth").addEventListener("click", onHealth);
+      $("btnLive").addEventListener("click", onLive);
+      $("btnPredict").addEventListener("click", onPredict);
+      $("btnClear").addEventListener("click", onClear);
+
+      // Save settings on change
+      ["baseUrl", "vsCurrency", "days", "optunaTrials"].forEach(id => {
+        $(id).addEventListener("change", () => readSettings());
+        $(id).addEventListener("blur", () => readSettings());
+      });
+    </script>
+  </body>
+</html>
